@@ -1,0 +1,5 @@
+spring:
+  application:
+    name: onboarding-mcp-server
+server:
+  port: 8082

@@ -1,1 +1,1 @@
-# ai-sample-java-springboot
+# Intelligent Developer Onboarding Agent (AI Sample project in springboot)
