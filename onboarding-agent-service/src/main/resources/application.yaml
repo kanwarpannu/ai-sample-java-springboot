@@ -1,5 +1,24 @@
 spring:
   application:
     name: onboarding-agent-service
+  ai:
+    ollama:
+      base-url: http://localhost:11434
+      chat:
+        model: gemma4
+    model:
+      chat: ollama
+    mcp:
+      client:
+        enabled: false
+
 server:
   port: 8080
+
+springdoc:
+  api-docs:
+    path: /api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+    tags-sorter: alpha
+    operations-sorter: alpha
