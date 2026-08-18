@@ -33,6 +33,21 @@ services:
       timeout: 5s
       retries: 5
 
+  pgadmin:
+    image: dpage/pgadmin4
+    container_name: onboarding-pgadmin
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@onboarding.dev
+      PGADMIN_DEFAULT_PASSWORD: admin
+    ports:
+      - "5050:80"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+
 volumes:
   postgres_data:
   pgvector_data:
+  pgadmin_data:

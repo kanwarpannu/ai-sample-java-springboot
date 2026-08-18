@@ -66,13 +66,20 @@ Build a specific module only:
 
 ## Run the Onboarding Agent Service
 
-Start Ollama first (see Prerequisites), then:
+The agent service connects to `onboarding-mcp-server` at startup. Start all dependencies in order:
 
 ```bash
+# 1. Start PostgreSQL
+docker-compose up postgres -d
+
+# 2. Start the MCP server (port 8082)
+./mvnw -pl onboarding-mcp-server spring-boot:run &
+
+# 3. Start the agent (port 8080) — Ollama must also be running
 ./mvnw -pl onboarding-agent-service spring-boot:run
 ```
 
-The service starts on **port 8080**.
+The agent service starts on **port 8080**.
 
 | URL | Description |
 |---|---|
@@ -94,7 +101,7 @@ Response:
 ```json
 {
   "sessionId": "3f8a2b1c-...",
-  "reply": "Here is your personalised onboarding plan, Alice ..."
+  "reply": "I've created your onboarding plan, Alice! Your Plan ID is e7d2f9a1-... — keep it handy to check progress. Here are your 10 steps for BACKEND_ENGINEER: ..."
 }
 ```
 
@@ -127,4 +134,33 @@ rag-service (port 8083)
 ChromaDB / PGVector
 ```
 
-> **Note:** `knowledge-mcp-server`, `onboarding-mcp-server`, and `rag-service` are not yet implemented. The `onboarding-agent-service` uses `@Tool`-annotated stub beans to mock their responses during development.
+> **Note:** `onboarding-mcp-server` is fully implemented and wired to `onboarding-agent-service` via the Spring AI MCP client (Streamable HTTP). `knowledge-mcp-server` and `rag-service` are not yet built — `searchDocuments` is still served by a local stub bean in the agent service.
+
+
+## MCP Inspector
+
+Use the [MCP Inspector](https://github.com/modelcontextprotocol/inspector) to browse and test the tools exposed by `onboarding-mcp-server`.
+
+### Launch the inspector
+
+```bash
+npx @modelcontextprotocol/inspector
+```
+
+Open the inspector UI at `http://localhost:6274`.
+
+### Connect to onboarding-mcp-server
+
+`onboarding-mcp-server` uses the **Streamable HTTP** transport (Spring AI 2.0 default).
+
+| Field | Value |
+|---|---|
+| Transport | `Streamable HTTP` |
+| URL | `http://localhost:8082/mcp` |
+
+> **Note:** Start PostgreSQL and `onboarding-mcp-server` before connecting (see [Run the Onboarding Agent Service](#run-the-onboarding-agent-service)).
+
+```bash
+docker-compose up postgres -d
+./mvnw -pl onboarding-mcp-server spring-boot:run
+```
