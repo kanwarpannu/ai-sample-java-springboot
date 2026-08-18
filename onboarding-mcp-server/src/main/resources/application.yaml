@@ -22,6 +22,7 @@ spring:
       server:
         name: onboarding-mcp-server
         version: "1.0.0"
+        protocol: STREAMABLE
 
 server:
   port: 8082

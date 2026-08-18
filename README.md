@@ -134,7 +134,7 @@ rag-service (port 8083)
 ChromaDB / PGVector
 ```
 
-> **Note:** `onboarding-mcp-server` is fully implemented and wired to `onboarding-agent-service` via the Spring AI MCP client (Streamable HTTP). `knowledge-mcp-server` and `rag-service` are not yet built — `searchDocuments` is still served by a local stub bean in the agent service.
+> **Note:** `onboarding-mcp-server` is fully implemented and wired to `onboarding-agent-service` via the Spring AI MCP client using Streamable HTTP (`POST /mcp`). Streamable HTTP must be explicitly enabled on the server with `protocol: STREAMABLE` — Spring AI 2.0 defaults to SSE when this property is absent. `knowledge-mcp-server` and `rag-service` are not yet built — `searchDocuments` is still served by a local stub bean in the agent service.
 
 
 ## MCP Inspector
@@ -151,7 +151,7 @@ Open the inspector UI at `http://localhost:6274`.
 
 ### Connect to onboarding-mcp-server
 
-`onboarding-mcp-server` uses the **Streamable HTTP** transport (Spring AI 2.0 default).
+`onboarding-mcp-server` uses the **Streamable HTTP** transport, enabled explicitly via `spring.ai.mcp.server.protocol: STREAMABLE` in its `application.yaml` (Spring AI 2.0 defaults to SSE if this is not set).
 
 | Field | Value |
 |---|---|

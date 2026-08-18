@@ -14,7 +14,7 @@ spring:
         streamable-http:
           connections:
             onboarding-server:
-              url: http://localhost:8082
+              url: http://localhost:8082/mcp
 
 server:
   port: 8080
