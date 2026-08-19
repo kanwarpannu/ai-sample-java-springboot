@@ -1,12 +1,14 @@
 package com.example.knowledge.mcp.client;
 
 import com.example.knowledge.mcp.domain.Document;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
 
+@Slf4j
 @Component
 public class MockRagServiceClient implements RagServiceClient {
 
@@ -390,36 +392,50 @@ public class MockRagServiceClient implements RagServiceClient {
 
     @Override
     public List<Document> searchDocuments(String keyword) {
+        log.info("[CLIENT] searchDocuments | keyword='{}'", keyword);
         String lower = keyword.toLowerCase();
-        return DOCUMENTS.stream()
+        List<Document> results = DOCUMENTS.stream()
                 .filter(doc -> matchesKeyword(doc, lower))
                 .toList();
+        log.info("[CLIENT] searchDocuments | returning {} document(s)", results.size());
+        return results;
     }
 
     @Override
     public Optional<Document> getDocument(String documentId) {
-        return DOCUMENTS.stream()
+        log.info("[CLIENT] getDocument | documentId='{}'", documentId);
+        Optional<Document> result = DOCUMENTS.stream()
                 .filter(doc -> doc.id().equals(documentId))
                 .findFirst();
+        log.info("[CLIENT] getDocument | found={}", result.isPresent());
+        return result;
     }
 
     @Override
     public List<Document> listDocuments(String category) {
+        log.info("[CLIENT] listDocuments | category='{}'", category);
+        List<Document> results;
         if (category == null || category.isBlank()) {
-            return DOCUMENTS;
+            results = DOCUMENTS;
+        } else {
+            results = DOCUMENTS.stream()
+                    .filter(doc -> doc.category().equalsIgnoreCase(category))
+                    .toList();
         }
-        return DOCUMENTS.stream()
-                .filter(doc -> doc.category().equalsIgnoreCase(category))
-                .toList();
+        log.info("[CLIENT] listDocuments | returning {} document(s)", results.size());
+        return results;
     }
 
     @Override
     public List<Document> searchByCategory(String category, String keyword) {
+        log.info("[CLIENT] searchByCategory | category='{}', keyword='{}'", category, keyword);
         String lower = keyword.toLowerCase();
-        return DOCUMENTS.stream()
+        List<Document> results = DOCUMENTS.stream()
                 .filter(doc -> doc.category().equalsIgnoreCase(category))
                 .filter(doc -> matchesKeyword(doc, lower))
                 .toList();
+        log.info("[CLIENT] searchByCategory | returning {} document(s)", results.size());
+        return results;
     }
 
     private boolean matchesKeyword(Document doc, String keyword) {

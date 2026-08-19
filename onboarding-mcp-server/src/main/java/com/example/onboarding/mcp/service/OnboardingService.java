@@ -9,6 +9,7 @@ import com.example.onboarding.mcp.repository.OnboardingPlanRepository;
 import com.example.onboarding.mcp.repository.OnboardingStepRepository;
 import com.example.onboarding.mcp.repository.StepTemplateRepository;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -17,6 +18,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class OnboardingService {
@@ -28,9 +30,11 @@ public class OnboardingService {
 
     @Transactional
     public String createOnboardingPlan(String developerName, String role) {
+        log.info("[SERVICE] createOnboardingPlan | developerName='{}', role='{}'", developerName, role);
         String normalizedRole = role.toUpperCase().replace(" ", "_");
 
         List<StepTemplate> templates = stepTemplateRepository.findByRoleOrderByStepNumber(normalizedRole);
+        log.info("[REPOSITORY] stepTemplateRepository.findByRoleOrderByStepNumber | role='{}' → {} template(s)", normalizedRole, templates.size());
         if (templates.isEmpty()) {
             return "Error: No step templates found for role '" + role
                     + "'. Supported roles: BACKEND_ENGINEER, FRONTEND_ENGINEER, PRODUCT_MANAGER";
@@ -42,6 +46,7 @@ public class OnboardingService {
                 .steps(new ArrayList<>())
                 .build();
         plan = planRepository.save(plan);
+        log.info("[REPOSITORY] planRepository.save | plan created, id='{}'", plan.getId());
 
         for (StepTemplate template : templates) {
             OnboardingStep step = OnboardingStep.builder()
@@ -54,6 +59,8 @@ public class OnboardingService {
                     .build();
             stepRepository.save(step);
         }
+        log.info("[REPOSITORY] stepRepository.save | {} step(s) saved for planId='{}'", templates.size(), plan.getId());
+        log.info("[SERVICE] createOnboardingPlan | completed for '{}', planId='{}'", developerName, plan.getId());
 
         return String.format(
                 "Onboarding plan created for %s (%s). Plan ID: %s. %d steps assigned. " +
@@ -63,17 +70,20 @@ public class OnboardingService {
 
     @Transactional(readOnly = true)
     public String getOnboardingProgress(String planId) {
+        log.info("[SERVICE] getOnboardingProgress | planId='{}'", planId);
         UUID uuid = parseUuid(planId);
         if (uuid == null) {
             return "Error: Invalid plan ID format. Expected a UUID.";
         }
 
         OnboardingPlan plan = planRepository.findById(uuid).orElse(null);
+        log.info("[REPOSITORY] planRepository.findById | planId='{}' → found={}", planId, plan != null);
         if (plan == null) {
             return "Error: No onboarding plan found with ID " + planId;
         }
 
         List<OnboardingStep> steps = stepRepository.findByPlanOrderByStepNumber(plan);
+        log.info("[REPOSITORY] stepRepository.findByPlanOrderByStepNumber | {} step(s) found for planId='{}'", steps.size(), planId);
         long completed = steps.stream().filter(OnboardingStep::isCompleted).count();
         long total = steps.size();
 
@@ -103,22 +113,26 @@ public class OnboardingService {
             sb.append("All steps complete! Onboarding finished.");
         }
 
+        log.info("[SERVICE] getOnboardingProgress | completed={}/{} for planId='{}'", completed, total, planId);
         return sb.toString().trim();
     }
 
     @Transactional
     public String updateOnboardingStep(String planId, int stepNumber, boolean completed) {
+        log.info("[SERVICE] updateOnboardingStep | planId='{}', stepNumber={}, completed={}", planId, stepNumber, completed);
         UUID uuid = parseUuid(planId);
         if (uuid == null) {
             return "Error: Invalid plan ID format. Expected a UUID.";
         }
 
         OnboardingPlan plan = planRepository.findById(uuid).orElse(null);
+        log.info("[REPOSITORY] planRepository.findById | planId='{}' → found={}", planId, plan != null);
         if (plan == null) {
             return "Error: No onboarding plan found with ID " + planId;
         }
 
         OnboardingStep step = stepRepository.findByPlanAndStepNumber(plan, stepNumber).orElse(null);
+        log.info("[REPOSITORY] stepRepository.findByPlanAndStepNumber | stepNumber={} → found={}", stepNumber, step != null);
         if (step == null) {
             return "Error: Step " + stepNumber + " not found in plan " + planId;
         }
@@ -128,23 +142,28 @@ public class OnboardingService {
         stepRepository.save(step);
 
         String status = completed ? "COMPLETED" : "REOPENED";
+        log.info("[REPOSITORY] stepRepository.save | step {} marked {}", stepNumber, status);
+        log.info("[SERVICE] updateOnboardingStep | step {} → {} for planId='{}'", stepNumber, status, planId);
         return String.format("Step %d '%s' marked as %s for %s.",
                 stepNumber, step.getTitle(), status, plan.getDeveloperName());
     }
 
     @Transactional
     public String reportBlocker(String planId, int stepNumber, String description) {
+        log.info("[SERVICE] reportBlocker | planId='{}', stepNumber={}", planId, stepNumber);
         UUID uuid = parseUuid(planId);
         if (uuid == null) {
             return "Error: Invalid plan ID format. Expected a UUID.";
         }
 
         OnboardingPlan plan = planRepository.findById(uuid).orElse(null);
+        log.info("[REPOSITORY] planRepository.findById | planId='{}' → found={}", planId, plan != null);
         if (plan == null) {
             return "Error: No onboarding plan found with ID " + planId;
         }
 
         OnboardingStep step = stepRepository.findByPlanAndStepNumber(plan, stepNumber).orElse(null);
+        log.info("[REPOSITORY] stepRepository.findByPlanAndStepNumber | stepNumber={} → found={}", stepNumber, step != null);
         if (step == null) {
             return "Error: Step " + stepNumber + " not found in plan " + planId;
         }
@@ -155,6 +174,8 @@ public class OnboardingService {
                 .resolved(false)
                 .build();
         blocker = blockerRepository.save(blocker);
+        log.info("[REPOSITORY] blockerRepository.save | blockerId={} created for stepNumber={}", blocker.getId(), stepNumber);
+        log.info("[SERVICE] reportBlocker | blockerId={} created, stepNumber={}, planId='{}'", blocker.getId(), stepNumber, planId);
 
         return String.format(
                 "Blocker reported for step %d '%s' (plan: %s). Blocker ID: %d. Description: '%s'. " +
@@ -164,7 +185,9 @@ public class OnboardingService {
 
     @Transactional
     public String resolveBlocker(long blockerId) {
+        log.info("[SERVICE] resolveBlocker | blockerId={}", blockerId);
         Blocker blocker = blockerRepository.findById(blockerId).orElse(null);
+        log.info("[REPOSITORY] blockerRepository.findById | blockerId={} → found={}", blockerId, blocker != null);
         if (blocker == null) {
             return "Error: No blocker found with ID " + blockerId;
         }
@@ -172,6 +195,8 @@ public class OnboardingService {
         blocker.setResolved(true);
         blocker.setResolvedAt(LocalDateTime.now());
         blockerRepository.save(blocker);
+        log.info("[REPOSITORY] blockerRepository.save | blockerId={} resolved", blockerId);
+        log.info("[SERVICE] resolveBlocker | blockerId={} resolved", blockerId);
 
         return String.format("Blocker %d resolved: '%s'", blockerId, blocker.getDescription());
     }

@@ -3,11 +3,13 @@ package com.example.knowledge.mcp.service;
 import com.example.knowledge.mcp.client.RagServiceClient;
 import com.example.knowledge.mcp.domain.Document;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
 import java.util.Optional;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class KnowledgeService {
@@ -15,7 +17,9 @@ public class KnowledgeService {
     private final RagServiceClient ragServiceClient;
 
     public String searchDocuments(String keyword) {
+        log.info("[SERVICE] searchDocuments | keyword='{}'", keyword);
         List<Document> results = ragServiceClient.searchDocuments(keyword);
+        log.info("[SERVICE] searchDocuments | found {} document(s)", results.size());
         if (results.isEmpty()) {
             return "No documents found matching keyword: " + keyword;
         }
@@ -23,13 +27,17 @@ public class KnowledgeService {
     }
 
     public String getDocument(String documentId) {
+        log.info("[SERVICE] getDocument | documentId='{}'", documentId);
         Optional<Document> doc = ragServiceClient.getDocument(documentId);
+        log.info("[SERVICE] getDocument | found={}", doc.isPresent());
         return doc.map(this::formatFullDocument)
                   .orElse("No document found with ID: " + documentId);
     }
 
     public String listDocuments(String category) {
+        log.info("[SERVICE] listDocuments | category='{}'", category);
         List<Document> results = ragServiceClient.listDocuments(category);
+        log.info("[SERVICE] listDocuments | found {} document(s)", results.size());
         if (results.isEmpty()) {
             String qualifier = (category != null && !category.isBlank()) ? " in category: " + category : "";
             return "No documents found" + qualifier;
@@ -38,7 +46,9 @@ public class KnowledgeService {
     }
 
     public String searchByCategory(String category, String keyword) {
+        log.info("[SERVICE] searchByCategory | category='{}', keyword='{}'", category, keyword);
         List<Document> results = ragServiceClient.searchByCategory(category, keyword);
+        log.info("[SERVICE] searchByCategory | found {} document(s)", results.size());
         if (results.isEmpty()) {
             return "No documents found in category '" + category + "' matching keyword: " + keyword;
         }
