@@ -9,7 +9,7 @@ Multi-module Maven project. Parent artifact: `developer-onboarding-platform`.
 | Module | Port | Role | Status |
 |---|---|---|---|
 | `onboarding-agent-service` | 8080 | MCP host / orchestrator, Swagger UI entry point | Implemented |
-| `knowledge-mcp-server` | 8081 | MCP server — knowledge base tools | Not yet built |
+| `knowledge-mcp-server` | 8081 | MCP server — knowledge base tools | Implemented |
 | `onboarding-mcp-server` | 8082 | MCP server — onboarding workflow tools (PostgreSQL) | Implemented |
 | `rag-service` | 8083 | RAG pipeline — vector search and embeddings | Not yet built |
 
@@ -30,6 +30,7 @@ Multi-module Maven project. Parent artifact: `developer-onboarding-platform`.
 
 # Test a specific module
 ./mvnw -pl onboarding-agent-service test
+./mvnw -pl knowledge-mcp-server test
 ./mvnw -pl onboarding-mcp-server test
 
 # Build OCI image for a specific module
@@ -67,8 +68,8 @@ ChromaDB / PGVector
 ```
 
 - **LLM**: Ollama running locally with `gemma4` model, via `spring-ai-starter-model-ollama`. Configure under `spring.ai.ollama.*` in `onboarding-agent-service/src/main/resources/application.yaml`.
-- **MCP client**: `spring-ai-starter-mcp-client` is enabled (`spring.ai.mcp.client.enabled: true`). It connects to `onboarding-mcp-server` via Streamable HTTP (`http://localhost:8082/mcp`). A `SyncMcpToolCallbackProvider` is auto-created and injected into `AgentConfiguration`. `KnowledgeMcpTools` (`searchDocuments`) remains a local stub until `knowledge-mcp-server` is built.
-- **MCP servers**: `onboarding-mcp-server` uses `spring-ai-starter-mcp-server-webmvc`. In Spring AI 2.0, the default transport is **Streamable HTTP** (`spring.ai.mcp.server.protocol=streamable`) at endpoint `POST /mcp`. SSE (`/sse`) is only active when `protocol: SSE` is set explicitly. `knowledge-mcp-server` is not yet built.
+- **MCP client**: `spring-ai-starter-mcp-client` is enabled (`spring.ai.mcp.client.enabled: true`). It connects to both `onboarding-mcp-server` (`http://localhost:8082/mcp`) and `knowledge-mcp-server` (`http://localhost:8081/mcp`) via Streamable HTTP. A single `SyncMcpToolCallbackProvider` bean is auto-created and aggregates all tools from both connections; it is injected directly into `AgentConfiguration` to build the `ChatClient`.
+- **MCP servers**: Both `onboarding-mcp-server` and `knowledge-mcp-server` use `spring-ai-starter-mcp-server-webmvc`. In Spring AI 2.0, the default transport is **Streamable HTTP** (`spring.ai.mcp.server.protocol=streamable`) at endpoint `POST /mcp`. SSE (`/sse`) is only active when `protocol: SSE` is set explicitly.
 - **RAG**: `rag-service` is a plain REST service; vector store dependencies added when expanding.
 - **API docs**: SpringDoc OpenAPI 3 in `onboarding-agent-service` generates Swagger UI at `http://localhost:8080/swagger-ui.html`.
 
@@ -84,10 +85,43 @@ Package layout under `com.example.agent`:
 | `dto` | `ChatRequest`, `ChatResponse` | Lombok `@Data` DTOs |
 | `service` | `AgentService` | Orchestrates ChatClient + conversation history |
 | `service` | `ConversationStore` | In-memory `ConcurrentHashMap<sessionId, List<Message>>` |
-| `mcp` | `KnowledgeMcpTools` | `@Tool searchDocuments()` stub (until knowledge-mcp-server is built) |
-| `config` | `AgentConfiguration` | `ChatClient` bean wiring `KnowledgeMcpTools` + `SyncMcpToolCallbackProvider` (MCP tools) |
+| `config` | `AgentConfiguration` | `ChatClient` bean — injects `SyncMcpToolCallbackProvider` (aggregates all tools from both MCP servers) |
 
 Conversation flow: each request adds a `UserMessage` to session history → calls `ChatClient` with the full history → appends `AssistantMessage` with the reply → returns the reply.
+
+## knowledge-mcp-server Implementation
+
+MCP server on port 8081. Exposes 4 tools and MCP Resources via Streamable HTTP transport (`POST /mcp`). Backed by an in-memory `MockRagServiceClient` (10 seeded documents). `RagServiceClient` interface is prepared for a real HTTP client to `rag-service` when that module is built.
+
+### MCP Tools (4 tools)
+
+| Tool method | Description |
+|---|---|
+| `searchDocuments(keyword)` | Broad keyword search across all documents; returns list with ID, title, category, tags, 200-char snippet |
+| `getDocument(documentId)` | Retrieve full content of a document by its ID |
+| `listDocuments(category)` | List all documents, optionally filtered by category (`setup-guide`, `runbook`, `faq`, `standards`, `architecture`). Accepts `null` for all. |
+| `searchByCategory(category, keyword)` | Keyword search scoped to a specific category |
+
+### MCP Resources
+
+Each document is also exposed as an MCP Resource with URI scheme `knowledge://{category}/{documentId}` (MIME type `text/plain`). Resources are registered at startup via the `List<SyncResourceSpecification>` bean in `McpConfiguration`.
+
+### Package layout under `com.example.knowledge.mcp`
+
+| Package | Class | Role |
+|---|---|---|
+| `client` | `RagServiceClient` (interface) | Defines 4 query methods for document retrieval |
+| `client` | `MockRagServiceClient` | In-memory `@Component` impl — 10 documents across 5 categories |
+| `domain` | `Document` | Java record: `id, title, content, category, tags, source, lastUpdated` |
+| `service` | `KnowledgeService` | Delegates to `RagServiceClient`; formats results as `String` |
+| `tool` | `KnowledgeMcpTools` | `@Tool`-annotated methods delegating to `KnowledgeService` |
+| `config` | `McpConfiguration` | Registers `ToolCallbackProvider` + `List<SyncResourceSpecification>` beans |
+
+### Test structure (13 tests)
+
+- **Service test** (`@ExtendWith(MockitoExtension.class)`): `KnowledgeServiceTest` — 10 tests covering all operations, empty results, and content truncation
+- **Tool test** (`@ExtendWith(MockitoExtension.class)`): `KnowledgeMcpToolsTest` — 4 tests (one per tool, delegation checks)
+- Test YAML disables the MCP server (`spring.ai.mcp.server.enabled: false`) so tests don't need a servlet container.
 
 ## onboarding-mcp-server Implementation
 
@@ -134,7 +168,7 @@ Seed data (V2 migration): 10 steps each for `BACKEND_ENGINEER`, `FRONTEND_ENGINE
 
 - **Java 26**, **Spring Boot 4.0.7**, **Spring AI 2.0.0** — all bleeding-edge; prefer the official Spring AI 2.x docs.
 - Configuration is in `application.yaml` (not `.properties`) inside each module's `src/main/resources/`.
-- **Lombok** is used in `onboarding-agent-service` and `onboarding-mcp-server`. Because of Maven Compiler Plugin 3.14 + Java 26, Lombok **must** be declared in `<annotationProcessorPaths>` in the module's pom.xml — adding it only as a regular dependency is not sufficient.
+- **Lombok** is used in `onboarding-agent-service`, `knowledge-mcp-server`, and `onboarding-mcp-server`. Because of Maven Compiler Plugin 3.14 + Java 26, Lombok **must** be declared in `<annotationProcessorPaths>` in the module's pom.xml — adding it only as a regular dependency is not sufficient.
 - Tests use JUnit Jupiter 6.0.3 + `spring-boot-starter-webmvc-test` (MockMvc available).
 - Package roots: `com.example.agent`, `com.example.knowledge.mcp`, `com.example.onboarding.mcp`, `com.example.rag`.
 

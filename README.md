@@ -66,16 +66,19 @@ Build a specific module only:
 
 ## Run the Onboarding Agent Service
 
-The agent service connects to `onboarding-mcp-server` at startup. Start all dependencies in order:
+The agent service connects to both MCP servers at startup (fail-fast — both must be running). Start all dependencies in order:
 
 ```bash
 # 1. Start PostgreSQL
 docker-compose up postgres -d
 
-# 2. Start the MCP server (port 8082)
+# 2. Start the onboarding MCP server (port 8082)
 ./mvnw -pl onboarding-mcp-server spring-boot:run &
 
-# 3. Start the agent (port 8080) — Ollama must also be running
+# 3. Start the knowledge MCP server (port 8081)
+./mvnw -pl knowledge-mcp-server spring-boot:run &
+
+# 4. Start the agent (port 8080) — Ollama must also be running
 ./mvnw -pl onboarding-agent-service spring-boot:run
 ```
 
@@ -134,12 +137,12 @@ rag-service (port 8083)
 ChromaDB / PGVector
 ```
 
-> **Note:** `onboarding-mcp-server` is fully implemented and wired to `onboarding-agent-service` via the Spring AI MCP client using Streamable HTTP (`POST /mcp`). Streamable HTTP must be explicitly enabled on the server with `protocol: STREAMABLE` — Spring AI 2.0 defaults to SSE when this property is absent. `knowledge-mcp-server` and `rag-service` are not yet built — `searchDocuments` is still served by a local stub bean in the agent service.
+> **Note:** Both `onboarding-mcp-server` and `knowledge-mcp-server` are fully implemented and wired to `onboarding-agent-service` via the Spring AI MCP client using Streamable HTTP (`POST /mcp`). Streamable HTTP must be explicitly enabled on each server with `protocol: STREAMABLE` — Spring AI 2.0 defaults to SSE when this property is absent. `rag-service` is not yet built — `knowledge-mcp-server` currently uses an in-memory mock document store.
 
 
 ## MCP Inspector
 
-Use the [MCP Inspector](https://github.com/modelcontextprotocol/inspector) to browse and test the tools exposed by `onboarding-mcp-server`.
+Use the [MCP Inspector](https://github.com/modelcontextprotocol/inspector) to browse and test the tools exposed by either MCP server.
 
 ### Launch the inspector
 
@@ -149,18 +152,31 @@ npx @modelcontextprotocol/inspector
 
 Open the inspector UI at `http://localhost:6274`.
 
-### Connect to onboarding-mcp-server
+Both servers use the **Streamable HTTP** transport, enabled via `spring.ai.mcp.server.protocol: STREAMABLE` in each server's `application.yaml`.
 
-`onboarding-mcp-server` uses the **Streamable HTTP** transport, enabled explicitly via `spring.ai.mcp.server.protocol: STREAMABLE` in its `application.yaml` (Spring AI 2.0 defaults to SSE if this is not set).
+### Connect to onboarding-mcp-server
 
 | Field | Value |
 |---|---|
 | Transport | `Streamable HTTP` |
 | URL | `http://localhost:8082/mcp` |
 
-> **Note:** Start PostgreSQL and `onboarding-mcp-server` before connecting (see [Run the Onboarding Agent Service](#run-the-onboarding-agent-service)).
+> Exposes 5 tools: `createOnboardingPlan`, `getOnboardingProgress`, `updateOnboardingStep`, `reportBlocker`, `resolveBlocker`. Requires PostgreSQL to be running.
 
 ```bash
 docker-compose up postgres -d
 ./mvnw -pl onboarding-mcp-server spring-boot:run
+```
+
+### Connect to knowledge-mcp-server
+
+| Field | Value |
+|---|---|
+| Transport | `Streamable HTTP` |
+| URL | `http://localhost:8081/mcp` |
+
+> Exposes 4 tools: `searchDocuments`, `getDocument`, `listDocuments`, `searchByCategory`. Also exposes MCP Resources at `knowledge://{category}/{documentId}`. No external dependencies — starts standalone.
+
+```bash
+./mvnw -pl knowledge-mcp-server spring-boot:run
 ```
