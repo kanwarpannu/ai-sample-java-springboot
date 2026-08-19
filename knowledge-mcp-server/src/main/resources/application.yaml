@@ -1,5 +1,11 @@
 spring:
   application:
     name: knowledge-mcp-server
+  ai:
+    mcp:
+      server:
+        name: knowledge-mcp-server
+        version: "1.0.0"
+        protocol: STREAMABLE
 server:
   port: 8081
