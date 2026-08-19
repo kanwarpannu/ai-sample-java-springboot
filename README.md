@@ -140,6 +140,72 @@ ChromaDB / PGVector
 > **Note:** Both `onboarding-mcp-server` and `knowledge-mcp-server` are fully implemented and wired to `onboarding-agent-service` via the Spring AI MCP client using Streamable HTTP (`POST /mcp`). Streamable HTTP must be explicitly enabled on each server with `protocol: STREAMABLE` — Spring AI 2.0 defaults to SSE when this property is absent. `rag-service` is not yet built — `knowledge-mcp-server` currently uses an in-memory mock document store.
 
 
+## RAG Service & Vector Database
+
+The `rag-service` (port 8083) handles document ingestion and semantic search. It connects to a **PostgreSQL** instance on port 5433 with the **pgvector** extension — not a separate database, just a Postgres plugin that adds vector column types and similarity search operators.
+
+### Why pgvector instead of plain SQL?
+
+Normal SQL finds exact or pattern matches (`WHERE content LIKE '%auth%'`). Vector search finds *semantically similar* content — so a query for "how do I log in" can match a document about "authentication flow" even if those words don't appear in it.
+
+### Database (port 5433)
+
+| Detail | Value |
+|---|---|
+| Host | `localhost:5433` |
+| Database | `rag_db` |
+| User / Password | `rag` / `rag` |
+
+### Schema ([V1__create_schema.sql](rag-service/src/main/resources/db/migration/V1__create_schema.sql))
+
+Two tables, managed by Flyway:
+
+**`documents`** — plain metadata table, nothing vector-specific:
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | VARCHAR PK | Document identifier |
+| `title`, `content` | VARCHAR / TEXT | Human-readable content |
+| `category`, `tags`, `source` | VARCHAR / TEXT | Filtering metadata |
+| `last_updated` | DATE | |
+
+**`vector_store`** — Spring AI's managed table for embeddings:
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | UUID PK | Auto-generated |
+| `content` | TEXT | The text chunk that was embedded |
+| `metadata` | JSON | Arbitrary key-value pairs |
+| `embedding` | VECTOR(768) | 768 floating-point numbers representing the meaning of `content` |
+
+The `VECTOR(768)` column is what pgvector adds. Think of it as a coordinate in 768-dimensional space — texts with similar meaning end up at nearby coordinates.
+
+### The HNSW index
+
+```sql
+CREATE INDEX vector_store_embedding_idx
+    ON vector_store USING HNSW (embedding vector_cosine_ops);
+```
+
+This is the vector equivalent of a B-tree index. Instead of speeding up exact lookups, it speeds up **nearest-neighbor searches** — finding rows whose embedding is closest to a query embedding. HNSW (Hierarchical Navigable Small World) is the algorithm; `vector_cosine_ops` means distance is measured by cosine similarity (angle between vectors), which works well for text.
+
+### Query flow
+
+1. User asks a question
+2. `rag-service` sends the question to Ollama (`nomic-embed-text` model) and gets back a `VECTOR(768)`
+3. pgvector finds the closest stored embeddings: `ORDER BY embedding <=> $1 LIMIT 5` (the `<=>` operator is "cosine distance")
+4. The matched `content` chunks are returned to the caller to use as context for the LLM answer
+
+### Start the RAG service
+
+```bash
+# Start the dedicated PostgreSQL instance for rag-service
+docker-compose up rag-postgres -d
+
+# Run the service
+./mvnw -pl rag-service spring-boot:run
+```
+
 ## MCP Inspector
 
 Use the [MCP Inspector](https://github.com/modelcontextprotocol/inspector) to browse and test the tools exposed by either MCP server.
