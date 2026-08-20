@@ -3,8 +3,11 @@ package com.example.agent.config;
 import lombok.RequiredArgsConstructor;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.mcp.SyncMcpToolCallbackProvider;
+import org.springframework.ai.tool.ToolCallback;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+
+import java.util.Arrays;
 
 @Configuration
 @RequiredArgsConstructor
@@ -37,9 +40,13 @@ public class AgentConfiguration {
 
     @Bean
     public ChatClient chatClient(ChatClient.Builder builder) {
+        ToolCallback[] wrapped = Arrays.stream(mcpToolCallbackProvider.getToolCallbacks())
+                .map(StateAwareToolCallback::new)
+                .toArray(ToolCallback[]::new);
+
         return builder
                 .defaultSystem(SYSTEM_PROMPT)
-                .defaultTools((Object[]) mcpToolCallbackProvider.getToolCallbacks())
+                .defaultTools((Object[]) wrapped)
                 .build();
     }
 }

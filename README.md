@@ -123,6 +123,45 @@ curl -X POST http://localhost:8080/api/v1/chat \
   }'
 ```
 
+## Observability — State Machine & Session-correlated Logging
+
+Every chat session is tracked by two orthogonal state machines and every log line carries the `sessionId` via SLF4J MDC so you can grep a session's full activity in one step.
+
+### Agent Processing State (resets after each request)
+
+```
+IDLE → PROCESSING → CALLING_TOOL → PROCESSING → RESPONDING → DONE
+                         ↑__________↑  (one cycle per tool call)
+ANY  → ERROR  (forced from any state; resets to IDLE in finally)
+```
+
+### Onboarding Workflow State (persists for the session lifetime)
+
+| Tool the agent calls | State transition |
+|---|---|
+| `createOnboardingPlan` | any → `PLAN_CREATED` |
+| `updateOnboardingStep` | → `IN_PROGRESS` |
+| `reportBlocker` | → `BLOCKED` |
+| `resolveBlocker` | → `IN_PROGRESS` |
+
+### Sample log output
+
+```
+14:32:01.001 INFO  [abc-123] AgentService          - Received message for session
+14:32:01.002 INFO  [abc-123] AgentStateMachine      - [agentState: IDLE->PROCESSING]
+14:32:01.050 INFO  [abc-123] StateAwareToolCallback - Calling tool: createOnboardingPlan | input=...
+14:32:01.051 INFO  [abc-123] OnboardingStateMachine - [onboardingState: NOT_STARTED->PLAN_CREATED]
+14:32:01.052 INFO  [abc-123] AgentStateMachine      - [agentState: CALLING_TOOL->PROCESSING]
+14:32:01.075 INFO  [abc-123] AgentStateMachine      - [agentState: PROCESSING->RESPONDING]
+14:32:01.076 INFO  [abc-123] AgentStateMachine      - [agentState: RESPONDING->DONE]
+14:32:01.077 INFO  [abc-123] AgentService          - Response generated | onboardingState=PLAN_CREATED
+14:32:01.077 INFO  [abc-123] AgentStateMachine      - [agentState: DONE->IDLE (reset)]
+```
+
+The `[abc-123]` field is the `sessionId` — grep it to see everything that happened in one conversation across all log lines.
+
+---
+
 ## Architecture
 
 ```
@@ -130,6 +169,9 @@ Swagger UI (primary user interface)
     |
     v
 onboarding-agent-service  (MCP host, port 8080)
+  ├── State machine per session (AgentProcessingState + OnboardingWorkflowState)
+  ├── MDC session-correlated logging (sessionId in every log line)
+  ├── StateAwareToolCallback (wraps each MCP tool call)
     |                     |
 MCP Client            MCP Client
     |                     |
@@ -141,7 +183,7 @@ rag-service (port 8083)
 PGVector (PostgreSQL :5433 + pgvector extension)
 ```
 
-> All four modules are fully implemented. `knowledge-mcp-server` calls `rag-service` over HTTP (`RestClient`) to perform semantic vector search. Both MCP servers connect to `onboarding-agent-service` via Streamable HTTP (`POST /mcp`) — `protocol: STREAMABLE` must be set in each server's `application.yaml`.
+> All four modules are fully implemented. `knowledge-mcp-server` calls `rag-service` over HTTP (`RestClient`) to perform semantic vector search. Both MCP servers connect to `onboarding-agent-service` via Streamable HTTP (`POST /mcp`).
 
 
 ## RAG Service & Vector Database

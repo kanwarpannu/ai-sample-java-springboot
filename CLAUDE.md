@@ -98,19 +98,80 @@ ChromaDB / PGVector
 
 ## onboarding-agent-service Implementation
 
-REST endpoint: `POST /api/v1/chat` — accepts `{sessionId?, message}`, returns `{sessionId, reply}`.
+REST endpoint: `POST /api/v1/chat` — accepts `{sessionId?, message}`, returns `{sessionId, reply}`.  
+Streaming endpoint: `POST /api/v1/chat/stream` — returns `SseEmitter`; events: `session` (sessionId) then `token` chunks.
 
 Package layout under `com.example.agent`:
 
 | Package | Class | Role |
 |---|---|---|
 | `controller` | `ChatController` | REST endpoint with Swagger annotations |
-| `dto` | `ChatRequest`, `ChatResponse` | Lombok `@Data` DTOs |
-| `service` | `AgentService` | Orchestrates ChatClient + conversation history |
-| `service` | `ConversationStore` | In-memory `ConcurrentHashMap<sessionId, List<Message>>` |
-| `config` | `AgentConfiguration` | `ChatClient` bean — injects `SyncMcpToolCallbackProvider` (aggregates all tools from both MCP servers) |
+| `dto` | `ChatRequest`, `ChatResponse`, `StreamResult` | Lombok `@Data` DTOs + streaming record |
+| `service` | `AgentService` | Orchestrates ChatClient + state machine hooks + MDC session correlation |
+| `session` | `SessionContext` | Per-session holder: conversation history + both state machines |
+| `session` | `SessionContextStore` | In-memory `ConcurrentHashMap<sessionId, SessionContext>` |
+| `session` | `SessionContextHolder` | `ThreadLocal<SessionContext>` carrier so tool wrappers can access session state |
+| `statemachine` | `AgentProcessingState` | Enum: `IDLE`, `PROCESSING`, `CALLING_TOOL`, `RESPONDING`, `DONE`, `ERROR` |
+| `statemachine` | `OnboardingWorkflowState` | Enum: `NOT_STARTED`, `PLAN_CREATED`, `IN_PROGRESS`, `BLOCKED`, `COMPLETED` |
+| `statemachine` | `AgentStateMachine` | Whitelist transition table; resets to `IDLE` after every request; `ERROR` always allowed |
+| `statemachine` | `OnboardingStateMachine` | Tool-name → workflow-state mapping; persists for session lifetime |
+| `config` | `AgentConfiguration` | `ChatClient` bean — wraps MCP tools with `StateAwareToolCallback` before registering |
+| `config` | `StateAwareToolCallback` | Decorates each MCP `ToolCallback`; transitions agent and onboarding states around each call |
 
-Conversation flow: each request adds a `UserMessage` to session history → calls `ChatClient` with the full history → appends `AssistantMessage` with the reply → returns the reply.
+### State machines
+
+**AgentProcessingState** (resets to `IDLE` after every request):
+```
+IDLE → PROCESSING → CALLING_TOOL → PROCESSING → RESPONDING → DONE
+                         ↑____________↑  (repeats for multi-tool calls)
+ANY  → ERROR  (forced regardless of current state)
+```
+
+**OnboardingWorkflowState** (persists for session lifetime):
+
+| Tool called | Transition |
+|---|---|
+| `createOnboardingPlan` | any → `PLAN_CREATED` |
+| `updateOnboardingStep` | `PLAN_CREATED` / `IN_PROGRESS` / `BLOCKED` → `IN_PROGRESS` |
+| `reportBlocker` | `IN_PROGRESS` → `BLOCKED` |
+| `resolveBlocker` | `BLOCKED` → `IN_PROGRESS` |
+
+### Session-correlated logging
+
+MDC key `sessionId` is set at the start of every `chat()` / `streamChat()` call and cleared in `finally`. Log pattern (configured in `logback-spring.xml`):
+
+```
+%d{HH:mm:ss.SSS} %-5level [%X{sessionId:-no-session}] [%thread] %logger{36} - %msg%n
+```
+
+Sample output for a plan-creation request:
+```
+14:32:01.001 INFO  [abc-123] AgentService          - Received message for session
+14:32:01.002 INFO  [abc-123] AgentStateMachine      - [agentState: IDLE->PROCESSING]
+14:32:01.050 INFO  [abc-123] StateAwareToolCallback - Calling tool: createOnboardingPlan | input=...
+14:32:01.051 INFO  [abc-123] OnboardingStateMachine - [onboardingState: NOT_STARTED->PLAN_CREATED]
+14:32:01.052 INFO  [abc-123] AgentStateMachine      - [agentState: CALLING_TOOL->PROCESSING]
+14:32:01.075 INFO  [abc-123] AgentStateMachine      - [agentState: PROCESSING->RESPONDING]
+14:32:01.076 INFO  [abc-123] AgentStateMachine      - [agentState: RESPONDING->DONE]
+14:32:01.077 INFO  [abc-123] AgentService          - Response generated | onboardingState=PLAN_CREATED
+14:32:01.077 INFO  [abc-123] AgentStateMachine      - [agentState: DONE->IDLE (reset)]
+```
+
+### Conversation flow
+
+1. Resolve / generate `sessionId` → `MDC.put("sessionId", ...)` → get `SessionContext` from store
+2. `agentSM.transition(PROCESSING)`
+3. Append `UserMessage` to history
+4. `ChatClient.prompt().messages(history).call().content()` — tool calls intercepted by `StateAwareToolCallback` during this step
+5. `agentSM.transition(RESPONDING)` → append `AssistantMessage` → `agentSM.transition(DONE)`
+6. `finally`: `agentSM.reset()` → `SessionContextHolder.clear()` → `MDC.clear()`
+
+### Test structure (36 tests)
+
+- **Controller test** (`@WebMvcTest`): `ChatControllerTest` — 3 tests
+- **Service test** (`@ExtendWith(MockitoExtension.class)`): `AgentServiceTest` — 9 tests (7 conversation tests + 2 state machine lifecycle tests)
+- **State machine tests**: `AgentStateMachineTest` — 8 tests, `OnboardingStateMachineTest` — 10 tests
+- **Store test**: `SessionContextStoreTest` — 6 tests
 
 ## knowledge-mcp-server Implementation
 

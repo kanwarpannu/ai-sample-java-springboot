@@ -2,18 +2,22 @@ package com.example.agent.service;
 
 import com.example.agent.dto.ChatRequest;
 import com.example.agent.dto.ChatResponse;
+import com.example.agent.session.SessionContext;
+import com.example.agent.session.SessionContextStore;
+import com.example.agent.statemachine.AgentProcessingState;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.mockito.junit.jupiter.MockitoSettings;
+import org.mockito.quality.Strictness;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.UserMessage;
 
-import java.util.ArrayList;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -22,6 +26,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
+@MockitoSettings(strictness = Strictness.LENIENT)
 class AgentServiceTest {
 
     @Mock
@@ -34,7 +39,7 @@ class AgentServiceTest {
     private ChatClient.CallResponseSpec callResponseSpec;
 
     @Mock
-    private ConversationStore store;
+    private SessionContextStore store;
 
     @InjectMocks
     private AgentService agentService;
@@ -49,8 +54,7 @@ class AgentServiceTest {
 
     @Test
     void chat_withNoSessionId_generatesANewSessionId() {
-        List<Message> history = new ArrayList<>();
-        when(store.getOrCreate(anyString())).thenReturn(history);
+        when(store.getOrCreate(anyString())).thenAnswer(inv -> new SessionContext(inv.getArgument(0)));
 
         ChatRequest request = ChatRequest.builder()
                 .message("Hello, how do I get started?")
@@ -65,8 +69,7 @@ class AgentServiceTest {
 
     @Test
     void chat_withProvidedSessionId_usesExistingSession() {
-        List<Message> history = new ArrayList<>();
-        when(store.getOrCreate("my-session")).thenReturn(history);
+        when(store.getOrCreate("my-session")).thenReturn(new SessionContext("my-session"));
 
         ChatRequest request = ChatRequest.builder()
                 .sessionId("my-session")
@@ -80,8 +83,7 @@ class AgentServiceTest {
 
     @Test
     void chat_withBlankSessionId_generatesANewSessionId() {
-        List<Message> history = new ArrayList<>();
-        when(store.getOrCreate(anyString())).thenReturn(history);
+        when(store.getOrCreate(anyString())).thenAnswer(inv -> new SessionContext(inv.getArgument(0)));
 
         ChatRequest request = ChatRequest.builder()
                 .sessionId("   ")
@@ -96,8 +98,8 @@ class AgentServiceTest {
 
     @Test
     void chat_appendsUserMessageThenAssistantMessageToHistory() {
-        List<Message> history = new ArrayList<>();
-        when(store.getOrCreate(anyString())).thenReturn(history);
+        SessionContext ctx = new SessionContext("test-session");
+        when(store.getOrCreate("test-session")).thenReturn(ctx);
 
         ChatRequest request = ChatRequest.builder()
                 .sessionId("test-session")
@@ -106,6 +108,7 @@ class AgentServiceTest {
 
         agentService.chat(request);
 
+        List<Message> history = ctx.getHistory();
         assertEquals(2, history.size());
         assertInstanceOf(UserMessage.class, history.get(0));
         assertInstanceOf(AssistantMessage.class, history.get(1));
@@ -113,8 +116,8 @@ class AgentServiceTest {
 
     @Test
     void chat_userMessageInHistoryMatchesRequestMessage() {
-        List<Message> history = new ArrayList<>();
-        when(store.getOrCreate(anyString())).thenReturn(history);
+        SessionContext ctx = new SessionContext("test-session");
+        when(store.getOrCreate("test-session")).thenReturn(ctx);
 
         ChatRequest request = ChatRequest.builder()
                 .sessionId("test-session")
@@ -123,13 +126,13 @@ class AgentServiceTest {
 
         agentService.chat(request);
 
-        assertEquals("Set up my dev environment", history.get(0).getText());
+        assertEquals("Set up my dev environment", ctx.getHistory().get(0).getText());
     }
 
     @Test
     void chat_assistantMessageInHistoryMatchesLlmReply() {
-        List<Message> history = new ArrayList<>();
-        when(store.getOrCreate(anyString())).thenReturn(history);
+        SessionContext ctx = new SessionContext("test-session");
+        when(store.getOrCreate("test-session")).thenReturn(ctx);
 
         ChatRequest request = ChatRequest.builder()
                 .sessionId("test-session")
@@ -138,17 +141,40 @@ class AgentServiceTest {
 
         agentService.chat(request);
 
-        assertEquals("Test reply from agent", history.get(1).getText());
+        assertEquals("Test reply from agent", ctx.getHistory().get(1).getText());
     }
 
     @Test
     void chat_multiTurn_historyGrowsAcrossTurns() {
-        List<Message> history = new ArrayList<>();
-        when(store.getOrCreate("multi-turn")).thenReturn(history);
+        SessionContext ctx = new SessionContext("multi-turn");
+        when(store.getOrCreate("multi-turn")).thenReturn(ctx);
 
         agentService.chat(ChatRequest.builder().sessionId("multi-turn").message("Turn 1").build());
         agentService.chat(ChatRequest.builder().sessionId("multi-turn").message("Turn 2").build());
 
-        assertEquals(4, history.size()); // 2 user + 2 assistant
+        assertEquals(4, ctx.getHistory().size()); // 2 user + 2 assistant
+    }
+
+    @Test
+    void chat_successfulRequest_agentStateResetsToIdle() {
+        SessionContext ctx = new SessionContext("state-check");
+        when(store.getOrCreate("state-check")).thenReturn(ctx);
+
+        agentService.chat(ChatRequest.builder().sessionId("state-check").message("Hello").build());
+
+        assertEquals(AgentProcessingState.IDLE, ctx.getAgentSM().current());
+    }
+
+    @Test
+    void chat_llmThrowsException_agentStateResetsToIdle() {
+        SessionContext ctx = new SessionContext("error-session");
+        when(store.getOrCreate("error-session")).thenReturn(ctx);
+        when(chatClient.prompt()).thenThrow(new RuntimeException("LLM unavailable"));
+
+        assertThrows(RuntimeException.class, () ->
+                agentService.chat(ChatRequest.builder().sessionId("error-session").message("Hello").build())
+        );
+
+        assertEquals(AgentProcessingState.IDLE, ctx.getAgentSM().current());
     }
 }
