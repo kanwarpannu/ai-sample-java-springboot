@@ -9,3 +9,6 @@ spring:
         protocol: STREAMABLE
 server:
   port: 8081
+
+rag-service:
+  base-url: http://localhost:8083

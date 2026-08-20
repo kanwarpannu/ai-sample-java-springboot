@@ -29,11 +29,12 @@ An AI-powered platform that helps new engineers get up to speed faster using a c
 
 - Java 26+ (`java -version`)
 - Maven Wrapper included — no separate Maven installation needed
-- [Ollama](https://ollama.com) running locally with the `gemma4` model pulled:
+- [Ollama](https://ollama.com) running locally with the required models pulled:
 
 ```bash
-ollama pull gemma4
-ollama serve          # if not already running as a system service
+ollama pull gemma4           # LLM used by the agent
+ollama pull nomic-embed-text # embedding model used by rag-service
+ollama serve                 # if not already running as a system service
 ```
 
 ## Build the Project
@@ -69,16 +70,19 @@ Build a specific module only:
 The agent service connects to both MCP servers at startup (fail-fast — both must be running). Start all dependencies in order:
 
 ```bash
-# 1. Start PostgreSQL
-docker-compose up postgres -d
+# 1. Start both PostgreSQL instances
+docker-compose up postgres pgvector -d
 
 # 2. Start the onboarding MCP server (port 8082)
 ./mvnw -pl onboarding-mcp-server spring-boot:run &
 
-# 3. Start the knowledge MCP server (port 8081)
+# 3. Start rag-service (port 8083) — Ollama + nomic-embed-text must be running
+./mvnw -pl rag-service spring-boot:run &
+
+# 4. Start the knowledge MCP server (port 8081) — rag-service must be running
 ./mvnw -pl knowledge-mcp-server spring-boot:run &
 
-# 4. Start the agent (port 8080) — Ollama must also be running
+# 5. Start the agent (port 8080) — Ollama + gemma4 must be running
 ./mvnw -pl onboarding-agent-service spring-boot:run
 ```
 
@@ -130,14 +134,14 @@ onboarding-agent-service  (MCP host, port 8080)
 MCP Client            MCP Client
     |                     |
 knowledge-mcp-server  onboarding-mcp-server
-(port 8081)           (port 8082, PostgreSQL)
+(port 8081)           (port 8082, PostgreSQL :5432)
     |
 rag-service (port 8083)
     |
-ChromaDB / PGVector
+PGVector (PostgreSQL :5433 + pgvector extension)
 ```
 
-> **Note:** Both `onboarding-mcp-server` and `knowledge-mcp-server` are fully implemented and wired to `onboarding-agent-service` via the Spring AI MCP client using Streamable HTTP (`POST /mcp`). Streamable HTTP must be explicitly enabled on each server with `protocol: STREAMABLE` — Spring AI 2.0 defaults to SSE when this property is absent. `rag-service` is not yet built — `knowledge-mcp-server` currently uses an in-memory mock document store.
+> All four modules are fully implemented. `knowledge-mcp-server` calls `rag-service` over HTTP (`RestClient`) to perform semantic vector search. Both MCP servers connect to `onboarding-agent-service` via Streamable HTTP (`POST /mcp`) — `protocol: STREAMABLE` must be set in each server's `application.yaml`.
 
 
 ## RAG Service & Vector Database
@@ -199,10 +203,10 @@ This is the vector equivalent of a B-tree index. Instead of speeding up exact lo
 ### Start the RAG service
 
 ```bash
-# Start the dedicated PostgreSQL instance for rag-service
-docker-compose up rag-postgres -d
+# Start the dedicated PostgreSQL + pgvector instance for rag-service (port 5433)
+docker-compose up pgvector -d
 
-# Run the service
+# Run the service — Ollama with nomic-embed-text must be running
 ./mvnw -pl rag-service spring-boot:run
 ```
 
@@ -241,8 +245,10 @@ docker-compose up postgres -d
 | Transport | `Streamable HTTP` |
 | URL | `http://localhost:8081/mcp` |
 
-> Exposes 4 tools: `searchDocuments`, `getDocument`, `listDocuments`, `searchByCategory`. Also exposes MCP Resources at `knowledge://{category}/{documentId}`. No external dependencies — starts standalone.
+> Exposes 4 tools: `searchDocuments`, `getDocument`, `listDocuments`, `searchByCategory`. Also exposes MCP Resources at `knowledge://{category}/{documentId}`. Requires `rag-service` to be running (calls it at startup to register resources).
 
 ```bash
+docker-compose up pgvector -d
+./mvnw -pl rag-service spring-boot:run &
 ./mvnw -pl knowledge-mcp-server spring-boot:run
 ```
